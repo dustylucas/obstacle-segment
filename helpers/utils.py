@@ -95,12 +95,14 @@ def draw_detections(image, boxes, scores, class_ids, mask_alpha=0.3, mask_maps=N
         )
         th = int(th * 1.2)
 
-        cv2.rectangle(mask_img, (x1, y1), (x1 + tw, y1 - th), color, -1)
+        down_tweak = 10
+
+        cv2.rectangle(mask_img, (x1, y1 + down_tweak), (x1 + tw, y1 - th), color, -1)
 
         cv2.putText(
             mask_img,
             caption,
-            (x1, y1),
+            (x1, y1 + down_tweak),
             cv2.FONT_HERSHEY_SIMPLEX,
             size,
             (255, 255, 255),

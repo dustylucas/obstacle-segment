@@ -28,10 +28,11 @@ class Segment:
 
     def segment_objects_from_oakd(self, output0, output1):
 
-        self.boxes, self.scores, self.class_ids, mask_pred = self.process_box_output(
+        self.boxes, self.scores, self.class_ids, self.mask_pred = self.process_box_output(
             output0
         )
-        self.mask_maps = self.process_mask_output(mask_pred, output1)
+
+        self.mask_maps = self.process_mask_output(self.mask_pred, output1)
 
         return self.boxes, self.scores, self.class_ids, self.mask_maps
 
@@ -73,7 +74,7 @@ class Segment:
         )
 
     def process_mask_output(self, mask_predictions, mask_output):
-
+        print('In process_mask_output (prototypes, coeffs --> binary mask)')
         if mask_predictions.shape[0] == 0:
             return []
 
