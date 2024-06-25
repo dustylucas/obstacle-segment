@@ -128,9 +128,9 @@ def ransac_indices(xyz, threshold=0.01):
     plane1 = Plane()
     
     if len(downsampled_xyz) < 3:
-        return np.array([]), np.zeros(shape, dtype=bool), np.zeros(shape, dtype=bool), np.zeros(shape, dtype=np.uint8)
+        return np.array([]), np.zeros(shape, dtype=np.uint8), np.zeros(shape, dtype=np.uint8), np.zeros(shape, dtype=np.uint8)
     
-    best_eq, best_inliers, bottom_liers, top_liers, distance_map = plane1.fit(downsampled_xyz, thresh=0.005, obs_thresh=0.01) # 0.2 cm
+    best_eq, best_inliers, bottom_liers, top_liers, distance_map = plane1.fit(downsampled_xyz, thresh=0.01, obs_thresh=0.015) # 0.2 cm
     best_inliers = np.asarray(best_inliers, dtype=int)
 
     def indices_to_indices(idx):

@@ -20,7 +20,7 @@ class Plane:
         self.inliers = []
         self.equation = []
 
-    def fit(self, pts, thresh=0.05, minPoints=100, maxIteration=1000, obs_thresh=0.1):
+    def fit(self, pts, thresh=0.05, maxIteration=1000, obs_thresh=0.1):
         """
         Find the best equation for a plane.
 
@@ -39,7 +39,6 @@ class Plane:
 
         bottom_liers = []
         top_liers = []
-        distance_map = []
 
         for it in range(maxIteration):
 
@@ -85,5 +84,7 @@ class Plane:
                 curbs = np.where((dist_pt < -0.01) & (dist_pt > -obs_thresh * 4))[0]
             self.inliers = best_inliers
             self.equation = best_eq
+
+        print("Plane equation: ", self.equation)
 
         return self.equation, self.inliers, bottom_liers, top_liers, curbs

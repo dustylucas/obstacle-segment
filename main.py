@@ -32,7 +32,6 @@ dot = dot > 0
 
 path_to_yolo_blob = "models/yolov8n-seg.blob"
 
-
 def main():
     pipeline = dai.Pipeline()
 
@@ -96,7 +95,7 @@ def main():
     camera_intrinsics_matrix = np.array(calib_data.getCameraIntrinsics(dai.CameraBoardSocket.CAM_A, ))
     print(camera_intrinsics_matrix)
 
-    device.setIrLaserDotProjectorBrightness(200) # 0 to 1200
+    device.setIrLaserDotProjectorBrightness(500) # 0 to 1200
 
     create_matrix(device, (preview_img_height, preview_img_width))
 
@@ -110,21 +109,6 @@ def main():
     while True:
         if cv2.waitKey(1) == ord("q"):
             break
-
-        # rgb_queue_msg = rgb_queue.get()
-        # yolo_nn_queue_msg = yolo_nn_queue.get()
-        # depth_queue_msg = depth_queue.get()
-
-        # if rgb_queue_msg is None:
-        #     print("rgb_queue message is empty")
-        #     continue
-        
-        # depth_frame = (
-        #     depth_queue_msg.getFrame() if depth_queue_msg is not None else None
-        # )  # depth frame returns values in mm (millimeter)
-
-        # if yolo_nn_queue_msg is None or depth_frame is None:
-        #     continue
 
         message_group = sync_queue.get()
         for name, msg in message_group:
@@ -149,23 +133,24 @@ def main():
             newshape=(output1_shape),
         )
 
-        rows = [
-            np.concatenate((output1[0, 0:8]), axis=1),
-            np.concatenate((output1[0, 8:16]), axis=1),
-            np.concatenate((output1[0, 16:24]), axis=1),
-            np.concatenate((output1[0, 24:32]), axis=1),
-        ]
+        # rows = [
+        #     np.concatenate((output1[0, 0:8]), axis=1),
+        #     np.concatenate((output1[0, 8:16]), axis=1),
+        #     np.concatenate((output1[0, 16:24]), axis=1),
+        #     np.concatenate((output1[0, 24:32]), axis=1),
+        # ]
 
-        bigone = np.concatenate(rows, axis=0)
+        # bigone = np.concatenate(rows, axis=0)
 
-        cv2.imshow("All Prototypes", bigone)
+        # cv2.imshow("All Prototypes", bigone)
 
         if len(output0) == 0 or len(output1) == 0:
             continue
 
         # Begin!
+        print()
 
-        print('Depth max', depth_frame.max(), depth_frame.dtype)
+        # cv2.imshow("RGB", frame)
 
         # Depth rendering and RANSAC
         points = depth_to_3d(depth_frame)
@@ -173,43 +158,29 @@ def main():
         
         ground_points, floor_mask, obs_mask, curb_mask = ransac_indices(points)
 
-        # pcl_converter.visualize_pcl(ground_points, downsample=False)
+        # pcl_converter.visualize_pcl(points, downsample=False)
 
-        floor_mask = cv2.resize(floor_mask, (output1.shape[3], output1.shape[2]), interpolation=cv2.INTER_NEAREST)
-        obs_mask = cv2.resize(obs_mask, (output1.shape[3], output1.shape[2]), interpolation=cv2.INTER_NEAREST)
+        print("floor_mask shape", floor_mask.shape, floor_mask.dtype)
 
-        R = 15
+        R = 35
         kernel = np.zeros((2 * R + 1, 2 * R + 1), np.uint8)
         cv2.circle(kernel, (R, R), R, 1, -1)
         kernel[R:(2*R+1), :] = 0
         curb_mask_dilate = cv2.dilate(curb_mask, kernel, iterations=1)
-        curb_mask_dilate = cv2.resize(curb_mask_dilate, (output1.shape[3], output1.shape[2]), interpolation=cv2.INTER_AREA)
 
 
         cv2.imshow('Grounds/Obs', np.concatenate((floor_mask * 255,
                                                    obs_mask * 255,
                                                    curb_mask_dilate * 255), axis=1))
+        
+        floor_mask = cv2.resize(floor_mask, (output1.shape[3], output1.shape[2]), interpolation=cv2.INTER_AREA)
+        obs_mask = cv2.resize(obs_mask, (output1.shape[3], output1.shape[2]), interpolation=cv2.INTER_AREA)
+        curb_mask_dilate = cv2.resize(curb_mask_dilate, (output1.shape[3], output1.shape[2]), interpolation=cv2.INTER_AREA)
 
         depthFrameScaled = (np.clip(depth_frame / 10000, 0, 1) * 255).astype(np.uint8)
         depthFrameDisp = cv2.applyColorMap(depthFrameScaled, cv2.COLORMAP_JET)
         # cv2.imshow('Grounds', depthFrameDisp)
           
-        # Segment
-        # yoloseg = Segment(
-        #     input_shape=input_shape,
-        #     input_height=preview_img_height,
-        #     input_width=preview_img_width,
-        #     conf_thres=0.2,
-        #     iou_thres=0.5,
-        # )
-
-        # yoloseg.prepare_input_for_oakd(frame.shape[:2])
-
-        # boxes, scores, class_ids, mask_maps = (
-        #     yoloseg.segment_objects_from_oakd(output0, output1)
-        # )
-
-        # frame = yoloseg.draw_masks(frame.copy())
         mask_alpha = 0.6
 
         print("Prototype shape ", output1.shape)
@@ -224,22 +195,27 @@ def main():
 
             # if i in [2, 8, 12, 14, 19, 20, 24, 26, 27, 29, 31]:
             #     continue
+            
+            unknown = (obs_mask == 0) & (floor_mask == 0) 
+            unknown_similarity = proto[unknown].sum() / (proto.shape[0] * proto.shape[1])
 
-            similarity = proto[dot].sum() / dot.sum()
-            inv_similarity = proto[not_dot].sum() / (not_dot).sum()
-            mean = (similarity + inv_similarity) / 2
-            var = inv_similarity - mean # var = similarity - mean
-            scale = var
+            floor_similarity = (proto * floor_mask).sum() / floor_mask.sum()
+            obs_similarity = (proto * obs_mask).sum() / obs_mask.sum()
+            mean = (floor_similarity + obs_similarity) / 2
+            coeff = obs_similarity - mean 
+            coeff = coeff * 1 / (unknown_similarity + 0.2)
 
-            proto_sum += (proto - mean) * scale
+            proto_sum += coeff * (proto - mean)
         
         # Manual protos (Good for objects)
-        proto_sum = output1[0, 1] + output1[0, 2] + output1[0, 4] + output1[0, 6] + -1 * output1[0, 16] + -1 * output1[0, 21]
+        # proto_sum = output1[0, 1] + output1[0, 2] + output1[0, 4] + output1[0, 6] + -1 * output1[0, 16] + -1 * output1[0, 21]
+
+        conf_thresh = 0.3
 
         kernel = np.ones((5,5),np.uint8)
+        proto_sum_dilate = proto_sum.copy()
+        proto_sum_dilate[proto_sum < conf_thresh] = 0
         proto_sum_dilate = cv2.dilate(proto_sum, kernel, iterations=1)
-
-        freespace_mask = sigmoid(proto_sum * 3)
 
         # Edge
         sobelY = sobel(proto_sum, axis=0)
@@ -251,8 +227,8 @@ def main():
         print("Mask Sobel", sobelS.shape, round(sobelS.min(), 3), round(sobelS.max(), 3))
 
         # Get bottoms of mask
-        sobelS = np.clip(sobelS / 11, 0, 1) # N
-        mask = np.where((sobelA < radians(-10)) & (proto_sum_dilate > 0.5) & curb_mask_dilate, sobelS, 0)
+        sobelS = np.clip(sobelS / 11, 0, 1) 
+        mask = np.where((sobelS > 0.4) & (sobelA < radians(-10)) & curb_mask_dilate & (proto_sum_dilate > 0), sobelS, 0)
 
         # Make sure edges do not exceed lowest contour
         # y_coords = np.arange(mask.shape[0])[:, np.newaxis]  # Hx1
@@ -266,77 +242,27 @@ def main():
         # row_indices = np.arange(mask.shape[0])[:, np.newaxis] # Hx1
         # mask[row_indices < lowest_acceptable] = 0
 
-        rgb = [0.3, 0.0, 1.0]
-        maskDisp = np.dstack((rgb[0] * mask + 0.2 * freespace_mask, rgb[1] * mask + 0.5 * freespace_mask, rgb[2] * mask))
-        # maskDisp[..., 2][dot] = 0.99
-        maskDispUpscaled = cv2.resize(maskDisp, (frame.shape[1], frame.shape[0]), interpolation=cv2.INTER_LINEAR)
-        
-        cv2.imshow("Mask", (maskDispUpscaled * 255).astype(np.uint8))
+        protoDisp = sigmoid(proto_sum)
+        protoDisp[protoDisp < conf_thresh] = 0
+        maskDisp = np.dstack((0 * protoDisp, 0.5 * protoDisp, 0 * protoDisp))
+        print("maskdisp shape", maskDisp.shape)
+        print("protoDisp shape", protoDisp.shape)
 
-        print("MaskDisp", maskDisp.shape, round(maskDisp.min(), 3), round(maskDisp.max(), 3))
-        print("Frame", frame.shape, frame.min(), frame.max(), frame.dtype)
+        maskDisp[..., 2] = np.maximum(maskDisp[..., 2], mask)
+        maskDisp[..., 0] = np.maximum(maskDisp[..., 0], 0.2 * mask)
+        maskDispUpscaled = cv2.resize(maskDisp, (frame.shape[1], frame.shape[0]), interpolation=cv2.INTER_LINEAR)
 
         frame = cv2.addWeighted(
             (maskDispUpscaled * 255).astype(np.uint8), 
             mask_alpha, frame, 1 - mask_alpha, 0)
         
         cv2.imshow("Output", frame)
+        cv2.imshow("proto_sum", proto_sum_dilate.astype(np.uint8) * 255)
 
-        
+        depthFrameScaled = (np.clip(depth_frame / 2000, 0, 1) * 255).astype(np.uint8)
+        depthFrameDisp = cv2.applyColorMap(depthFrameScaled, cv2.COLORMAP_JET)
+        cv2.imshow('Depth', depthFrameDisp)
 
-        # for i in range(len(boxes)):
-        #     mask = mask_maps[i].astype(np.uint8)
-        #     contours, _ = cv2.findContours(
-        #         mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-        #     )
-        #     for contour in contours:
-        #         center, size, angle = cv2.minAreaRect(contour)
-        #         box_points = cv2.boxPoints((center, size, angle))
-        #         box_points = np.int32(box_points)
-        #         cv2.drawContours(frame, [box_points], 0, (0, 255, 0), 2)
-
-        #         # print("RotatedRect: ", center, size, angle)
-        #         # print("box points: ", box_points)
-
-        #         mask = np.zeros(frame.shape[:2], dtype=np.uint8)
-        #         cv2.drawContours(mask, [box_points], -1, 255, -1)
-
-        #         masked_frame = cv2.bitwise_and(frame, frame, mask=mask)
-        #         cv2.imshow("Masked Output", masked_frame)
-
-        #         masked_depth_frame = cv2.bitwise_and(
-        #             depth_frame, depth_frame, mask=mask
-        #         )
-        #         vals_inside_rotated_rect = masked_depth_frame[mask != 0]
-        #         depth = np.median(vals_inside_rotated_rect)
-
-        #         # print(vals_inside_rotated_rect)
-        #         # print(len(vals_inside_rotated_rect))
-
-        #         # depth_frame_roi = depth_frame[
-        #         #     int(boxes[i][1]) : int(boxes[i][3]),
-        #         #     int(boxes[i][0]) : int(boxes[i][2]),
-        #         # ]
-        #         # depth = np.median(depth_frame_roi.flatten())
-        #         # print(len(depth_frame_roi.flatten()))
-        #         # print(len(depth_frame.flatten()))
-
-        #         cv2.putText(
-        #             frame,
-        #             f"Z: {int(depth)} mm",
-        #             (int(center[0]) - 50, int(center[1]) - 25),
-        #             cv2.FONT_HERSHEY_TRIPLEX,
-        #             0.5,
-        #             (255, 255, 255),
-        #         )
-        #         cv2.putText(
-        #             frame,
-        #             f"Angle: {round(angle, 1)}",
-        #             (int(center[0]) - 50, int(center[1]) + 25),
-        #             cv2.FONT_HERSHEY_TRIPLEX,
-        #             0.5,
-        #             (255, 255, 255),
-        #         )
 
 if __name__ == "__main__":
     main()
