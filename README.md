@@ -1,29 +1,19 @@
-# YOLO Segment & Depth | OAK-D Pro PoE
+# YOLO Curb Detection without Classes
 
-**Notice:** As of March 26, 2024, the depthai-sdk does not offer official support for running YOLO instance segmentation inference alongside depth on the device.
+This repository provides code that detects the boundary of obstacles (curbs) using the color and depth information provided by an OAK-D Pro. It uses intermediate data from a YOLO model to find object boundaries given some example points in the inside of the object.
 
-This repository provides code that facilitates inference on YOLOv8 models, extracting segmentation masks and depth information in millimeters (mm). The depth is extracted as the median of depth points within the rotated rectangle region of segment masks.
+The concept document is [here](https://docs.google.com/document/d/1lS5mrRXDqX3NMxOKWP08jXFPXZpRKm6UVFRw1kWfFeQ), which describes the overall principle, processing pipeline, failure cases, and abandoned approaches.
 
-## Running Inference
+The model blob is borrowed from [here](https://github.com/tirandazi/depthai-yolov8-segment), although it is possible to generate one from scratch. We don't use the bounding box branch of the network, so future development may remove it from the original pytorch model and regenerate a smaller blob.
 
-Follow these steps to execute the inference on a custom-trained YOLOv8 model:
+## Quickstart
 
-1. Open `helpers/export.py`.
-2. Modify the dimensions (height & width) values as required.
-3. Run the script. This action will generate a file in ONNX format.
-4. Note down the values of shapes for input, output0 and output1 from the terminal output. Open `helpers/config.json` and update the corresponding values. Also, update the class names in order in the `class_names` array.
-5. Next, Open a web browser and navigate to [http://blobconverter.luxonis.com/](http://blobconverter.luxonis.com/).
-6. Select the OpenVino default version.
-7. Choose ONNX as the model source and click continue.
-8. Upload the ONNX file.
-9. In the model optimizer params, update it to `--data_type=FP16 --mean_values=[0,0,0] --scale_values=[255,255,255]` and click convert.
-10. This will download the `.blob` file.
-11. Move/Copy this blob file to the `models` directory.
-12. Update the blob path in the variable `path_to_yolo_blob` at line 19 in `main.py`.
+These steps get the code running on an oakd-pro connected via ethernet to `10.25.76.102`
 
-## Credits
+1. Install pip packages by running `pip install -r requirements.txt` (there's also a conda `environment.yml` file which may be better at reproducing the setup exactly)
+2. Run `python main.py`
+3. Should see serveral windows popup: the `Ground/Obs/Curbs` masks generated from the depth data
+   The `Depth` output from the camera
+   The final `Output`, which is YOLO masks and curbs overlaid on the input RGB
+4. To show the prototype masks, pass `--show_protos` to the cmdline
 
-Special thanks to pedro-UCA and jakaskerl for the support provided in the Luxonis forum.
-
----
-**Note:** For any further assistance, please refer to the Luxonis forum.
