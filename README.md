@@ -17,3 +17,8 @@ These steps get the code running on an oakd-pro connected via ethernet to `10.25
    The final `Output`, which is YOLO masks and curbs overlaid on the input RGB
 4. To show the prototype masks, pass `--show_protos` to the cmdline
 
+## `demo-video` branch
+
+This branch contains the files I used to generate the demo video in my presentation. The code is pretty dirty, but could be a reference for projecting an 2D mask onto a plane.
+
+To recreat the video, run `record.py` (Hit Q to save!) and then `read.py` (Might have to change the intermediate file path frames.py)

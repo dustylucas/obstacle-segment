@@ -109,6 +109,7 @@ def main(show_protos):
         if frame is None or depth_frame is None or yolo_nn_queue_msg is None:
             continue
         
+        # This outputs the bounding boxes and classes, which we don't care about
         # output0 = np.reshape(
         #     yolo_nn_queue_msg.getLayerFp16("output0"),
         #     newshape=(model_coefficient_shape),
@@ -147,7 +148,8 @@ def main(show_protos):
         # Visualize pointcloud
         # pcl_converter.visualize_pcl(points, downsample=False)
 
-        # Dilate curb mask
+        # Dilate the curb mask with a semi-circle kernel
+        # These are all the areas that are near a ground-truth curb as detected by the depth map
         R = 35
         kernel = np.zeros((2 * R + 1, 2 * R + 1), np.uint8)
         cv2.circle(kernel, (R, R), R, 1, -1)
@@ -158,27 +160,37 @@ def main(show_protos):
                                                    obs_mask * 255,
                                                    curb_mask * 255), axis=1))
         
+        # Resize these masks from prototype size to RGB size, so we can compare them
         floor_mask = cv2.resize(floor_mask, (output1.shape[3], output1.shape[2]), interpolation=cv2.INTER_AREA)
         obs_mask = cv2.resize(obs_mask, (output1.shape[3], output1.shape[2]), interpolation=cv2.INTER_AREA)
         curb_mask_dilate = cv2.resize(curb_mask_dilate, (output1.shape[3], output1.shape[2]), interpolation=cv2.INTER_AREA)
 
         print("Prototype shape ", output1.shape)
 
-        # Optimized protos
+        # Optimize protos
 
         proto_sum = np.zeros(output1.shape[2:4], float)
 
         # Find the mask coefficients with highest adherence to dot
         for i, proto in enumerate(output1[0]):
             
-            # Some manually picked protos that only activate for partial regions
-            # (left side, bottom edge, etc.) which have been excluded to encourage
-            # final masks to be more global
+            # Manually excluded some protos that only activate for partial regions
+            # (left side, bottom edge, etc). Hopefully this encourages the
+            # final masks to be more global. But you can experiment with this.
             if i in [2, 8, 12, 14, 19, 20, 24, 26, 27, 29, 31]:
                 continue
             
+            # At some point I penalized masks for areas that the depth map
+            # didn't exist to make the masks mroe conservative. But it didn't
+            # seem to make a difference visually
             unknown = (obs_mask == 0) & (floor_mask == 0) 
-
+            
+            # This part works by finding the best values for the formula 
+            #              c * (proto - bias)
+            # such that the result maximizes the dot product proto * obs_mask
+            # and minimizes the dot product proto * floor_mask.
+            # This is based on some vauge memory of Maximum Likelihod Estimation,
+            # so I'm not sure if it's correct, but it works well enough somehow
             floor_similarity = (proto * floor_mask).sum() / floor_mask.sum()
             obs_similarity = (proto * obs_mask).sum() / obs_mask.sum()
             mean = (floor_similarity + obs_similarity) / 2
@@ -186,48 +198,70 @@ def main(show_protos):
 
             proto_sum += coeff * (proto - mean)
         
-        # Manual protos (Good for objects)
+        # Manual protos (Good for detecting only obvious objects)
         # proto_sum = output1[0, 1] + output1[0, 2] + output1[0, 4] + output1[0, 6] + -1 * output1[0, 16] + -1 * output1[0, 21]
 
         conf_thresh = 0.3
 
+        # Create proto_sum_dilate, which is a mask of all regions _close_ to an obstacle mask.
+        # The point of this is to allow curbs on the bottom edge to be counted
+        # We also threshold by a confidence value, which binarizes what we consider a mask and
+        # what is just noise
         kernel = np.ones((5,5),np.uint8)
         proto_sum_dilate = proto_sum.copy()
         proto_sum_dilate[proto_sum < conf_thresh] = 0
         proto_sum_dilate = cv2.dilate(proto_sum, kernel, iterations=1)
 
-        # Edge
+        # Edge Y
         sobelY = sobel(proto_sum, axis=0)
+        # Edge X
         sobelX = sobel(proto_sum, axis=1)
+        # Edge magnitude
         sobelS = np.sqrt(sobelX ** 2 + sobelY ** 2)
+        # Edge angle
         sobelA = np.arctan2(sobelY, sobelX)
-        sobelA = np.minimum(sobelA, np.pi - sobelA) # Angle distance above X axis
+        # How much is the edge angle above the X axis
+        sobelA = np.minimum(sobelA, np.pi - sobelA) 
 
         print("Mask Sobel", sobelS.shape, round(sobelS.min(), 3), round(sobelS.max(), 3))
 
-        # Get bottoms of mask
+        # Find curbs
         sobelS = np.clip(sobelS / 11, 0, 1) 
-        mask = np.where((sobelS > 0.4) & (sobelA < radians(-10)) & curb_mask_dilate & (proto_sum_dilate > 0), sobelS, 0)
+        curb_mask = np.where(
+            (sobelS > 0.4) & # Needs to be a steep edge to count as curb (filter noise, basically)
+            (sobelA < radians(-10)) & # Edge gradient needs to point down
+            curb_mask_dilate &  # Needs to be near a curb, as detected by the depth map
+            (proto_sum_dilate > 0), # Needs to be on the underside of a YOLO obstacle mask. TUNING: this number is can be much higher (like 10) for thinner curbs
+            sobelS, 
+            0)
 
+        # Following is display code, not related to algorithm, tweak to look nice
         mask_alpha = 0.6
 
+        # This is for displaying the green YOLO masks
         protoDisp = sigmoid(proto_sum)
+        # Filter out low confidence, to make the visualization less "fuzzy" 
         protoDisp[protoDisp < conf_thresh] = 0
-        maskDisp = np.dstack((0 * protoDisp, 0.5 * protoDisp, 0 * protoDisp))
-        print("maskdisp shape", maskDisp.shape)
+        # Make it green
+        protoDispGreen = np.dstack((0 * protoDisp, 0.5 * protoDisp, 0 * protoDisp))
+        print("maskdisp shape", protoDispGreen.shape)
         print("protoDisp shape", protoDisp.shape)
 
-        maskDisp[..., 2] = np.maximum(maskDisp[..., 2], mask)
-        maskDisp[..., 0] = np.maximum(maskDisp[..., 0], 0.2 * mask)
-        maskDispUpscaled = cv2.resize(maskDisp, (frame.shape[1], frame.shape[0]), interpolation=cv2.INTER_LINEAR)
+        # Combine the green YOLO masks with the curb mask
+        protoDispGreen[..., 2] = np.maximum(protoDispGreen[..., 2], curb_mask)
+        protoDispGreen[..., 0] = np.maximum(protoDispGreen[..., 0], 0.2 * curb_mask)
+        overlayDisp = cv2.resize(protoDispGreen, (frame.shape[1], frame.shape[0]), interpolation=cv2.INTER_LINEAR)
 
+        # Combine the masks with the RGB image
         frame = cv2.addWeighted(
-            (maskDispUpscaled * 255).astype(np.uint8), 
+            (overlayDisp * 255).astype(np.uint8), 
             mask_alpha, frame, 1 - mask_alpha, 0)
         
         cv2.imshow("Output", frame)
         # cv2.imshow("proto_sum", proto_sum_dilate.astype(np.uint8) * 255)
 
+        # Scale the depth frame from 0 - 2000mm to a range of 0 - 255
+        # Then run it through a colormap to make it look nice
         depthFrameScaled = (np.clip(depth_frame / 2000, 0, 1) * 255).astype(np.uint8)
         depthFrameDisp = cv2.applyColorMap(depthFrameScaled, cv2.COLORMAP_JET)
         cv2.imshow('Depth', depthFrameDisp)
