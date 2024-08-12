@@ -82,7 +82,7 @@ class Plane:
                 best_inliers = pt_id_inliers
                 bottom_liers = np.where(dist_pt < -obs_thresh)[0]
                 top_liers = np.where(dist_pt > obs_thresh)[0]
-                curbs = np.where((dist_pt < -0.01) & (dist_pt > -obs_thresh * 4))[0]
+                curbs = np.where((dist_pt < -0.02) & (dist_pt > -obs_thresh * 4))[0]
             self.inliers = best_inliers
             self.equation = best_eq
 
@@ -120,10 +120,10 @@ def ransac_indices(xyz):
     
     # If we don't have enough points for RANSAC, return empty arrays
     if len(downsampled_xyz) < 3:
-        return np.array([]), np.zeros(shape, dtype=np.uint8), np.zeros(shape, dtype=np.uint8), np.zeros(shape, dtype=np.uint8)
+        return np.array([0, 0, 0, 0]), np.array([]), np.zeros(shape, dtype=np.uint8), np.zeros(shape, dtype=np.uint8), np.zeros(shape, dtype=np.uint8)
     
     # Actually run RANSAC
-    best_eq, best_inliers, bottom_liers, top_liers, distance_map = plane1.fit(downsampled_xyz, thresh=0.005, obs_thresh=0.015) # 0.2 cm
+    best_eq, best_inliers, bottom_liers, top_liers, distance_map = plane1.fit(downsampled_xyz, thresh=0.01, obs_thresh=0.02) # 3 cm
     best_inliers = np.asarray(best_inliers, dtype=int)
 
     def downsampled_indices_to_indices(idx):
@@ -162,4 +162,4 @@ def ransac_indices(xyz):
         curb_mask[rows, cols] = True
 
     # Return the inlier points, the floor mask, obstacle mask, and curb mask (last three are HxW and correspond to camera image)
-    return xyz[best_inliers], floor_mask.astype(np.uint8), obs_mask.astype(np.uint8), curb_mask.astype(np.uint8)
+    return best_eq, xyz[best_inliers], floor_mask.astype(np.uint8), obs_mask.astype(np.uint8), curb_mask.astype(np.uint8)

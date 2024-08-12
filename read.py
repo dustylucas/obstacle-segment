@@ -28,102 +28,33 @@ model_proto_mask_shape = model_data["shapes"]["output1"]
 path_to_yolo_blob = "models/yolov8n-seg.blob"
 
 def main(show_protos):
-    pipeline = dai.Pipeline()
 
-    # Create node to sync RGB, NN, and Depth streams
-    sync = pipeline.create(dai.node.Sync)
-    xoutGrp = pipeline.create(dai.node.XLinkOut)
-    xoutGrp.setStreamName("xout")
-
-    # Neural network pipeline properties
-    nn = pipeline.createNeuralNetwork()
-    nn.setBlobPath(path_to_yolo_blob)
-    nn.out.link(sync.inputs["xout_yolo_nn"])
-
-    # Color cam properties (Cam_A/RGB)
-    cam_rgb = pipeline.createColorCamera()
-    cam_rgb.setPreviewSize(model_img_width, model_img_height)
-    cam_rgb.setInterleaved(False)
-    cam_rgb.setResolution(dai.ColorCameraProperties.SensorResolution.THE_800_P)
-    cam_rgb.preview.link(nn.input)
-    cam_rgb.preview.link(sync.inputs["xout_rgb"])
-    print("Color cam resolution: ", cam_rgb.getResolutionSize())
-
-    # Stereo/Depth node properties
-    stereo = pipeline.create(dai.node.StereoDepth)
-    stereo.setDefaultProfilePreset(dai.node.StereoDepth.PresetMode.HIGH_ACCURACY)
-    stereo.setDepthAlign(dai.CameraBoardSocket.CAM_A) # Align to RGB
-    stereo.setOutputSize(model_img_width, model_img_height)
-    stereo.setLeftRightCheck(True)
-    stereo.setSubpixel(True)
-    stereo.setExtendedDisparity(True)
-    stereo.depth.link(sync.inputs["xout_depth"])
-
-    # Link
-    sync.out.link(xoutGrp.input)
-
-    # Left cam properties (Cam_B/Mono)
-    left = pipeline.create(dai.node.MonoCamera)
-    left.setCamera("left")
-    left.setResolution(dai.MonoCameraProperties.SensorResolution.THE_800_P)
-    left.out.link(stereo.left)
-    print("Left cam resolution: ", left.getResolutionSize())
-
-    # Right cam properties (Cam_C/Mono)
-    right = pipeline.create(dai.node.MonoCamera)
-    right.setCamera("right")
-    right.setResolution(dai.MonoCameraProperties.SensorResolution.THE_800_P)
-    right.out.link(stereo.right)
-    print("Right cam resolution: ", right.getResolutionSize())
-    
     # Connect to device
-    device_info = dai.DeviceInfo("10.25.76.102")
-    device = dai.Device(pipeline, device_info)
+    # device_info = dai.DeviceInfo("10.25.76.102")
+    # device = dai.Device(dai.Pipeline(), device_info)
 
-    # Create camera projection matrix (depth map -> pointcloud)
-    projection_matrix = create_projection_matrix(device, (model_img_height, model_img_width))
-    print("Projection matrix: ", projection_matrix.shape)
+    # # Create camera projection matrix (depth map -> pointcloud)
+    # projection_matrix = create_projection_matrix(device, (model_img_height, model_img_width))
+    # print("Projection matrix: ", projection_matrix.shape)
+    # # Save the projection matrix for later use
+    # np.save("projection_matrix.npy", projection_matrix)
 
-    device.setIrLaserDotProjectorBrightness(500) # 0 to 1200
-
-    # Get output queue
-    sync_queue = device.getOutputQueue("xout", 5, False)
-
-    # Uncomment to use
-    # pcl_converter = PointCloudVisualizer()
+    # Load the projection matrix
+    projection_matrix = np.load("projection_matrix.npy")
     
-    while True:
+
+    data = np.load("frames3.npz")
+    frames, depth, yolo = data['frames'], data['depth_frames'], data['yolo_frames']
+    
+    for frame, depth_frame, output1 in zip(frames, depth, yolo):
         # Quit if q is pressed
         if cv2.waitKey(1) == ord("q"):
             break
-        
-        # Read from output queue, and skip if anything is missing
-        message_group = sync_queue.get()
-        for name, msg in message_group:
-            match name:
-                case "xout_rgb":
-                    frame = msg.getCvFrame()
-                case "xout_depth":
-                    depth_frame = msg.getCvFrame()
-                case "xout_yolo_nn":
-                    yolo_nn_queue_msg = msg
-
-        if frame is None or depth_frame is None or yolo_nn_queue_msg is None:
-            continue
         
         # output0 = np.reshape(
         #     yolo_nn_queue_msg.getLayerFp16("output0"),
         #     newshape=(model_coefficient_shape),
         # )
-
-        # Exract proto masks from NN 
-        output1 = np.reshape(
-            yolo_nn_queue_msg.getLayerFp16("output1"),
-            newshape=(model_proto_mask_shape),
-        )
-
-        if len(output1) == 0:
-            continue
 
         if show_protos:
             rows = [
@@ -147,14 +78,6 @@ def main(show_protos):
         
         # Get image-space masks for ground, obstacles, and curbs
         ground_plane, ground_points, floor_mask, obs_mask, curb_mask = ransac_indices(points)
-        
-
-        # Do a 3x3 erosion on floor_mask, obs_mask, curb_mask
-        kernel = np.ones((5, 5), np.uint8)
-        floor_mask = cv2.erode(floor_mask, kernel, iterations=1)
-        obs_mask = cv2.erode(obs_mask, kernel, iterations=1)
-        curb_mask = cv2.erode(curb_mask, kernel, iterations=1)
-
 
         # Visualize pointcloud
         # pcl_converter.visualize_pcl(points, downsample=False)
@@ -166,9 +89,9 @@ def main(show_protos):
         kernel[R:(2*R+1), :] = 0
         curb_mask_dilate = cv2.dilate(curb_mask, kernel, iterations=1)
 
-        # cv2.imshow('Grounds/Obs/Curbs', np.concatenate((floor_mask * 255,
-        #                                            obs_mask * 255,
-        #                                            curb_mask * 255), axis=1))
+        cv2.imshow('Grounds/Obs/Curbs', np.concatenate((floor_mask * 255,
+                                                   obs_mask * 255,
+                                                   curb_mask * 255), axis=1))
         
         floor_mask = cv2.resize(floor_mask, (output1.shape[3], output1.shape[2]), interpolation=cv2.INTER_AREA)
         obs_mask = cv2.resize(obs_mask, (output1.shape[3], output1.shape[2]), interpolation=cv2.INTER_AREA)
@@ -191,8 +114,8 @@ def main(show_protos):
             
             unknown = (obs_mask == 0) & (floor_mask == 0) 
 
-            floor_similarity = (proto * floor_mask).sum() / floor_mask.sum()
-            obs_similarity = 2 * (proto * obs_mask).sum() / obs_mask.sum()
+            floor_similarity = 2 * (proto * floor_mask).sum() / floor_mask.sum()
+            obs_similarity = 1 * (proto * obs_mask).sum() / obs_mask.sum()
             mean = (floor_similarity + obs_similarity) / 2
             coeff = obs_similarity - mean 
 
@@ -217,9 +140,11 @@ def main(show_protos):
 
         print("Mask Sobel", sobelS.shape, round(sobelS.min(), 3), round(sobelS.max(), 3))
 
+        print("Proto sum min max", proto_sum.min(), proto_sum.max())
+
         # Get bottoms of mask
         sobelS = np.clip(sobelS / 11, 0, 1) 
-        mask = np.where((sobelS > 0.4) & (sobelA < radians(-10)) & curb_mask_dilate & (proto_sum_dilate > 0), sobelS, 0)
+        mask = np.where((sobelS > 0.4) & (sobelA < radians(-10)) & curb_mask_dilate & (proto_sum_dilate > 10.5), sobelS, 0)
 
         mask_alpha = 0.6
 
@@ -231,27 +156,33 @@ def main(show_protos):
         # Display curb topdown
         depth_to_ground_plane = -1.0 * dist_to_ground_plane(projection_matrix, ground_plane)
         print("Ground plane depth min max:", depth_to_ground_plane.min(), depth_to_ground_plane.max(), depth_to_ground_plane.dtype)
-
+        
+        # mask_upscaled += 0.1
+        mask_upscaled = np.sqrt(mask_upscaled)
         curb_pointcloud = depth_to_3d_with_value(depth_to_ground_plane, projection_matrix, mask_upscaled)
         print("Curb pointcloud min max:", curb_pointcloud.min(), curb_pointcloud.max())
         # Gather curb points into a top down view of z-coordinate
-        bev = points_to_image_torch(curb_pointcloud[:, 0], curb_pointcloud[:, 1], curb_pointcloud[:, 3], -0.5, 0.5, -1, 0.2, 600)
+        bev = points_to_image_torch(curb_pointcloud[:, 0], curb_pointcloud[:, 1], curb_pointcloud[:, 3], -0.8, 1.5, -1.1, 0.8, 250)
         # Light gaussian blue to smooth out upscaling artifacts
         bev = cv2.GaussianBlur(bev, (11, 11), 0)
         # Make bev colored,
-        bev = np.dstack((0 * bev, 0.2 * bev, 1.0 * bev))
-        cv2.imshow("CurbTopDown", bev * 1.5)
+        bev = np.dstack((1.0 - 1.0 * bev, 1.0 - 0.8 * bev, 1.0 - 0 * bev))
+        cv2.imshow("CurbTopDown", bev)
 
         maskDisp = np.dstack((0 * proto_sum, 0.5 * proto_sum, 0 * proto_sum))
         print("maskdisp shape", maskDisp.shape)
 
-        maskDisp[..., 2] = np.maximum(maskDisp[..., 2], mask)
-        maskDisp[..., 0] = np.maximum(maskDisp[..., 0], 0.2 * mask)
-        maskDispUpscaled = cv2.resize(maskDisp, (frame.shape[1], frame.shape[0]), interpolation=cv2.INTER_LINEAR)
+        # maskDisp[..., 2] = np.maximum(maskDisp[..., 2], mask)
+        # maskDisp[..., 0] = np.maximum(maskDisp[..., 0], 0.2 * mask)
+        # maskDispUpscaled = cv2.resize(maskDisp, (frame.shape[1], frame.shape[0]), interpolation=cv2.INTER_LINEAR)
 
-        frame = cv2.addWeighted(
-            (maskDispUpscaled * 255).astype(np.uint8), 
-            mask_alpha, frame, 1 - mask_alpha, 0)
+        # frame = cv2.addWeighted(
+        #     (maskDispUpscaled * 255).astype(np.uint8), 
+        #     mask_alpha, frame, 1 - mask_alpha, 0)
+
+        frame[..., 2] = np.maximum(frame[..., 2], mask_upscaled * 255)
+        frame[..., 0] = np.maximum(frame[..., 0], (mask_upscaled * 0.2) * 255)
+        frame[..., 1] = np.maximum(frame[..., 1] - (mask_upscaled * 0.2) * 255, 0)
         
         cv2.imshow("Output", frame)
         # cv2.imshow("proto_sum", proto_sum_dilate.astype(np.uint8) * 255)

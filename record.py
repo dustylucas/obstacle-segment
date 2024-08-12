@@ -87,8 +87,12 @@ def main(show_protos):
     device.setIrLaserDotProjectorBrightness(500) # 0 to 1200
 
     # Get output queue
-    sync_queue = device.getOutputQueue("xout", 5, False)
-
+    sync_queue = device.getOutputQueue("xout", 1, False)
+    
+    frames = []
+    depth_frames = []
+    yolo_frames = []
+    
     # Uncomment to use
     # pcl_converter = PointCloudVisualizer()
     
@@ -125,6 +129,10 @@ def main(show_protos):
         if len(output1) == 0:
             continue
 
+        frames.append(frame)
+        depth_frames.append(depth_frame)
+        yolo_frames.append(output1)
+
         if show_protos:
             rows = [
                 np.concatenate((output1[0, 0:8]), axis=1),
@@ -147,14 +155,6 @@ def main(show_protos):
         
         # Get image-space masks for ground, obstacles, and curbs
         ground_plane, ground_points, floor_mask, obs_mask, curb_mask = ransac_indices(points)
-        
-
-        # Do a 3x3 erosion on floor_mask, obs_mask, curb_mask
-        kernel = np.ones((5, 5), np.uint8)
-        floor_mask = cv2.erode(floor_mask, kernel, iterations=1)
-        obs_mask = cv2.erode(obs_mask, kernel, iterations=1)
-        curb_mask = cv2.erode(curb_mask, kernel, iterations=1)
-
 
         # Visualize pointcloud
         # pcl_converter.visualize_pcl(points, downsample=False)
@@ -203,50 +203,48 @@ def main(show_protos):
 
         conf_thresh = 0.3
 
-        kernel = np.ones((5,5),np.uint8)
-        proto_sum_dilate = proto_sum.copy()
-        proto_sum_dilate[proto_sum < conf_thresh] = 0
-        proto_sum_dilate = cv2.dilate(proto_sum, kernel, iterations=1)
+        # kernel = np.ones((5,5),np.uint8)
+        # proto_sum_dilate = proto_sum.copy()
+        # proto_sum_dilate[proto_sum < conf_thresh] = 0
+        # proto_sum_dilate = cv2.dilate(proto_sum, kernel, iterations=1)
 
-        # Edge
-        sobelY = sobel(proto_sum, axis=0)
-        sobelX = sobel(proto_sum, axis=1)
-        sobelS = np.sqrt(sobelX ** 2 + sobelY ** 2)
-        sobelA = np.arctan2(sobelY, sobelX)
-        sobelA = np.minimum(sobelA, np.pi - sobelA) # Angle distance above X axis
+        # # Edge
+        # sobelY = sobel(proto_sum, axis=0)
+        # sobelX = sobel(proto_sum, axis=1)
+        # sobelS = np.sqrt(sobelX ** 2 + sobelY ** 2)
+        # sobelA = np.arctan2(sobelY, sobelX)
+        # sobelA = np.minimum(sobelA, np.pi - sobelA) # Angle distance above X axis
 
-        print("Mask Sobel", sobelS.shape, round(sobelS.min(), 3), round(sobelS.max(), 3))
+        # print("Mask Sobel", sobelS.shape, round(sobelS.min(), 3), round(sobelS.max(), 3))
 
-        # Get bottoms of mask
-        sobelS = np.clip(sobelS / 11, 0, 1) 
-        mask = np.where((sobelS > 0.4) & (sobelA < radians(-10)) & curb_mask_dilate & (proto_sum_dilate > 0), sobelS, 0)
+        # # Get bottoms of mask
+        # sobelS = np.clip(sobelS / 11, 0, 1) 
+        # mask = np.where((sobelS > 0.4) & (sobelA < radians(-10)) & curb_mask_dilate & (proto_sum_dilate > 0), sobelS, 0)
 
         mask_alpha = 0.6
 
         proto_sum = sigmoid(proto_sum)
         proto_sum[proto_sum < conf_thresh] = 0
 
-        mask_upscaled = cv2.resize(mask, (frame.shape[1], frame.shape[0]), interpolation=cv2.INTER_LINEAR)
+        # mask_upscaled = cv2.resize(mask, (frame.shape[1], frame.shape[0]), interpolation=cv2.INTER_LINEAR)
         
-        # Display curb topdown
-        depth_to_ground_plane = -1.0 * dist_to_ground_plane(projection_matrix, ground_plane)
-        print("Ground plane depth min max:", depth_to_ground_plane.min(), depth_to_ground_plane.max(), depth_to_ground_plane.dtype)
+        # # Display curb topdown
+        # depth_to_ground_plane = -1.0 * dist_to_ground_plane(projection_matrix, ground_plane)
+        # print("Ground plane depth min max:", depth_to_ground_plane.min(), depth_to_ground_plane.max(), depth_to_ground_plane.dtype)
 
-        curb_pointcloud = depth_to_3d_with_value(depth_to_ground_plane, projection_matrix, mask_upscaled)
-        print("Curb pointcloud min max:", curb_pointcloud.min(), curb_pointcloud.max())
-        # Gather curb points into a top down view of z-coordinate
-        bev = points_to_image_torch(curb_pointcloud[:, 0], curb_pointcloud[:, 1], curb_pointcloud[:, 3], -0.5, 0.5, -1, 0.2, 600)
-        # Light gaussian blue to smooth out upscaling artifacts
-        bev = cv2.GaussianBlur(bev, (11, 11), 0)
-        # Make bev colored,
-        bev = np.dstack((0 * bev, 0.2 * bev, 1.0 * bev))
-        cv2.imshow("CurbTopDown", bev * 1.5)
+        # curb_pointcloud = depth_to_3d_with_value(depth_to_ground_plane, projection_matrix, mask_upscaled)
+        # print("Curb pointcloud min max:", curb_pointcloud.min(), curb_pointcloud.max())
+        # # Gather curb points into a top down view of z-coordinate
+        # bev = points_to_image_torch(curb_pointcloud[:, 0], curb_pointcloud[:, 1], curb_pointcloud[:, 3], -0.5, 0.5, -1, 0.2, 600)
+        # # Light gaussian blue to smooth out upscaling artifacts
+        # bev = cv2.GaussianBlur(bev, (11, 11), 0)
+        # # Make bev colored,
+        # bev = np.dstack((0 * bev, 0.2 * bev, 1.0 * bev))
+        # cv2.imshow("CurbTopDown", bev * 1.5)
 
         maskDisp = np.dstack((0 * proto_sum, 0.5 * proto_sum, 0 * proto_sum))
         print("maskdisp shape", maskDisp.shape)
 
-        maskDisp[..., 2] = np.maximum(maskDisp[..., 2], mask)
-        maskDisp[..., 0] = np.maximum(maskDisp[..., 0], 0.2 * mask)
         maskDispUpscaled = cv2.resize(maskDisp, (frame.shape[1], frame.shape[0]), interpolation=cv2.INTER_LINEAR)
 
         frame = cv2.addWeighted(
@@ -258,7 +256,11 @@ def main(show_protos):
 
         depthFrameScaled = (np.clip(depth_frame / 2000, 0, 1) * 255).astype(np.uint8)
         depthFrameDisp = cv2.applyColorMap(depthFrameScaled, cv2.COLORMAP_JET)
-        # cv2.imshow('Depth', depthFrameDisp)
+        cv2.imshow('Depth', depthFrameDisp)
+
+    # Save frames
+    np.savez_compressed("frames.npz", frames=frames, depth_frames=depth_frames, yolo_frames=yolo_frames)
+
 
 
 if __name__ == "__main__":
